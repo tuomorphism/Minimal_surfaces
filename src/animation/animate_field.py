@@ -13,17 +13,20 @@ def build_vector_field_scene(
         background_color = WHITE,
         streak_time = 0.8,
         streak_opacity = 1.0,
-        dt = 0.05
+        dt = 0.05,
+        streak_scaling: float = 1.0
     ):
     def map_to_camera_view(point: np.array) -> np.array:
         return (point * 10) - 5
 
     def inverse_map_to_camera_view(point: np.array) -> np.array:
         return (point + 5) / 10
-    
+
     def mapping_of_vector_field(camera_position: np.array) -> np.array:
         mapped_position = inverse_map_to_camera_view(camera_position)
-        return vector_field.evaluate_at_point(mapped_position)
+        mapped_position = np.asarray([np.clip(p, 0, 0.99) for p in mapped_position])
+        value = vector_field.evaluate_at_point(mapped_position)
+        return value * streak_scaling
     
     def mapping_of_curve(t: float) -> np.array:
         return map_to_camera_view(curve_function(t))
@@ -49,9 +52,9 @@ def build_vector_field_scene(
             # Add streamlines
             stream_lines = StreamLines(
                 func=mapping_of_vector_field,
-                x_range=[-5, 5, 1],
-                y_range=[-5, 5, 1],
-                z_range=[-3, 3, 1],
+                x_range=[-4, 4, 1],
+                y_range=[-4, 4, 1],
+                z_range=[-2, 2, 1],
                 stroke_width=1.2,
                 virtual_time=streak_time,
                 color=streak_color,

@@ -13,7 +13,11 @@ class Grid:
         self.indices_grid, self.indices_flat = self._generate_indices()
         self.positions_grid, self.positions_flat = self._generate_positions(self.indices_flat)
 
-    def _generate_indices(self) -> tuple:
+        self._generate_indices()
+        self._compute_fourier_space()
+
+    def _generate_indices(self):
+        nx, ny, nz = self.res
         i, j, k = np.meshgrid(
             np.arange(self.resolution), np.arange(self.resolution), np.arange(self.resolution),
             indexing="ij"
@@ -53,7 +57,14 @@ class Grid:
         values = np.array([])
 
     def __repr__(self):
-        return f"Grid3D(resolution={self.resolution})"
+        return f"Grid3D(resolution={self.res}, bounds={self.bounds})"
+    
+    def _compute_fourier_space(self):
+        kx = 2 * np.pi * np.fft.fftfreq(self.res[0], d=self.scale[0])
+        ky = 2 * np.pi * np.fft.fftfreq(self.res[1], d=self.scale[1])
+        kz = 2 * np.pi * np.fft.fftfreq(self.res[2], d=self.scale[2])
+        self.k_space = np.meshgrid(kx, ky, kz, indexing="ij")
 
 if __name__ == '__main__':
+    # Test grid initialization
     grid = Grid(resolution=32)

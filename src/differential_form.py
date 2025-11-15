@@ -1,200 +1,152 @@
 import numpy as np
-from scipy.spatial import cKDTree
-from .grid import Grid
 
 class DifferentialForm:
-    def __init__(self, grid: Grid, form_degree: int = 0, evaluation: callable = None, field=None):
-        """
-        Create a differential form of specified degree on a grid.
-        
-        Parameters:
-        - grid: Grid instance containing the mesh information
-        - form_degree: 0 for scalar fields, 1 for vector fields
-        - evaluation: function to evaluate the form at points
-        - field: optional initial field values
-        """
-        assert isinstance(grid, Grid), "grid must be an instance of Grid"
-        assert form_degree in [0, 1], "Only 0-forms (scalar) and 1-forms (vector) are supported"
-
+    def __init__(self, grid, form_degree, field=None):
+        assert form_degree in [0, 1, 2], "Only 0-, 1-, and 2-forms are supported"
         self.grid = grid
+        self.h = grid.scale[0]
         self.form_degree = form_degree
-        self.h = grid.scale[0]  # Use grid's scale for step size
-        
-        # Initialize field based on degree
-        if field is None:
-            if form_degree == 0:
-                self.field = evaluation(grid.get_grid_positions()) if evaluation is not None else np.zeros(grid.res)
-            else:  # form_degree == 1
-                self.field = evaluation(grid.get_grid_positions()) if evaluation is not None else np.zeros((*grid.res, 3))
-        else:
+        if field is not None:
             self.field = field
-
-        # Precompute mass and L2 norm for 1-forms
-        if form_degree == 1:
-            self.mass = self._compute_mass()
-            self.l2_norm = np.sqrt(self * self)
         else:
-            self.mass = self.mass()
-            self.l2_norm = self.l2_norm()
+            shape = (*grid.res, 1) if form_degree == 0 else (*grid.res, 3)
+            self.field = np.zeros(shape)
 
-        # Build KDTree for nearest neighbor queries
-        self._build_kdtree()
-
-    def _build_kdtree(self):
-        """Build KDTree for efficient nearest neighbor queries."""
-        positions = self.grid.get_flat_positions()
-        self._kdtree = cKDTree(positions)
-
-    def _compute_mass(self):
-        """Compute the mass norm of a 1-form."""
-        if self.form_degree != 1:
-            raise ValueError("Mass norm computation is only defined for 1-forms")
-        norms_2 = self.vertex_norms()
-        return np.sum(norms_2) * (self.h ** 3)
-
-    def vertex_norms(self):
-        """Compute the norm of the form at each vertex."""
-        if self.form_degree == 0:
-            return np.abs(self.field)
-        return np.linalg.norm(self.field, axis=-1)
-
-    def __call__(self, positions: np.array = None, position_indices: np.array = None):
+    def exterior_derivative(self):
         """
-        Evaluate the form at given positions.
-        
-        Parameters:
-        - positions: (M, 3) array of points
-        - position_indices: (M, 3) array of grid indices
+        Computes the exterior derivative dw for k-form form w, dw is a (k + 1)-form.
         """
-        if positions is not None:
-            assert len(positions.shape) == 2 and positions.shape[1] == 3
-            if position_indices is None:
-                position_indices = self.grid.position_to_index(positions)
-        
+        h = self.h
+        d_field = np.zeros((*self.grid.res, 3))
         if self.form_degree == 0:
-            return self.field[position_indices[:, 0], position_indices[:, 1], position_indices[:, 2]]
-        else:
-            return self.field[position_indices[:, 0], position_indices[:, 1], position_indices[:, 2], :]
+            phi = self.field[..., 0]
+            d_field[..., 0] = (np.roll(phi, -1, axis=0) - np.roll(phi, 1, axis=0)) / (2*h)
+            d_field[..., 1] = (np.roll(phi, -1, axis=1) - np.roll(phi, 1, axis=1)) / (2*h)
+            d_field[..., 2] = (np.roll(phi, -1, axis=2) - np.roll(phi, 1, axis=2)) / (2*h)
+            return DifferentialForm(self.grid, 1, d_field)
+        elif self.form_degree == 1:
+            Fx, Fy, Fz = self.field[..., 0], self.field[..., 1], self.field[..., 2]
+            # The rules for computing the different elements come from standard
+            # wedge product rules for standard basis functionals dx, dy and dz
+            # combined with the definition of an exterior derivative.
+            # Notably, the first element is the coefficient for dy v dz
+            # second is dx v dz and third is dx v dy.
+            d_field[..., 0] = (np.roll(Fz, -1, axis=1) - np.roll(Fz, 1, axis=1)) / (2*h) - \
+                              (np.roll(Fy, -1, axis=2) - np.roll(Fy, 1, axis=2)) / (2*h)
+            d_field[..., 1] = (np.roll(Fx, -1, axis=2) - np.roll(Fx, 1, axis=2)) / (2*h) - \
+                              (np.roll(Fz, -1, axis=0) - np.roll(Fz, 1, axis=0)) / (2*h)
+            d_field[..., 2] = (np.roll(Fy, -1, axis=0) - np.roll(Fy, 1, axis=0)) / (2*h) - \
+                              (np.roll(Fx, -1, axis=1) - np.roll(Fx, 1, axis=1)) / (2*h)
+            return DifferentialForm(self.grid, 2, d_field)
+        elif self.form_degree == 2:
+            Gx, Gy, Gz = self.field[..., 0], self.field[..., 1], self.field[..., 2]
+            div = ((np.roll(Gx, -1, axis=0) - np.roll(Gx, 1, axis=0)) +
+                   (np.roll(Gy, -1, axis=1) - np.roll(Gy, 1, axis=1)) +
+                   (np.roll(Gz, -1, axis=2) - np.roll(Gz, 1, axis=2))) / (2*h)
+            return DifferentialForm(self.grid, 0, div[..., np.newaxis])
 
-    def evaluate_at_point(self, point: np.array) -> np.array:
+    def fft_poisson_solve(self, rhs_field):
         """
-        Evaluate the form at a single point.
-        This method is specifically designed for visualization compatibility.
+        Solves poisson equation on toroidal 3-dimensional space.
+        """
+        Nx, Ny, Nz = self.grid.res
+        kx, ky, kz = self.grid.k_space
+        h = self.grid.scale[0] # Assumes uniform grid
         
-        Parameters:
-        - point: (3,) array representing a point in space
-        
-        Returns:
-        - For 0-forms: scalar value
-        - For 1-forms: (3,) array representing the vector
+        k2 = kx**2 + ky**2 + kz**2
+        k2[0, 0, 0] = 1  # avoid division by zero for DC component
+        f_hat = np.fft.fftn(rhs_field[..., 0])
+
+        # Compute the Laplacian in Fourier space
+        laplacian_fourier = 4 / (h ** 2) * (
+            np.sin(kx / Nx) ** 2 +
+            np.sin(ky / Ny) ** 2 +
+            np.sin(kz / Nz) ** 2
+        )
+
+        # Regularize the zero frequency component
+        laplacian_fourier[0, 0, 0] = 1  # Prevent division by zero
+
+        # Solve Poisson's equation in Fourier space
+        result_fft = f_hat / (-laplacian_fourier + 1E-9)
+
+        # Transform back into real space
+        result = np.fft.ifftn(result_fft).real
+
+        return DifferentialForm(self.grid, 0, result[..., np.newaxis])
+    
+    def hodge_star(self):
+        """
+        The hodge star operation, defined using the standard euclidean metric.
+        Produces the dual differential forms for any 0, 1, or 2 -form. 
         """
         if self.form_degree == 0:
-            return self.__call__(point.reshape(1, 3))[0]
-        else:
-            return self.__call__(point.reshape(1, 3))[0]
-
-    def differentiation(self):
-        """Compute the exterior derivative of the form."""
-        if self.form_degree == 0:
-            # Gradient of scalar field (0-form → 1-form)
-            grad = np.zeros((*self.grid.res, 3))
-            phi = self.field
-            grad[..., 0] = (np.roll(phi, -1, axis=0) - np.roll(phi, 1, axis=0)) / (2 * self.h)
-            grad[..., 1] = (np.roll(phi, -1, axis=1) - np.roll(phi, 1, axis=1)) / (2 * self.h)
-            grad[..., 2] = (np.roll(phi, -1, axis=2) - np.roll(phi, 1, axis=2)) / (2 * self.h)
-            return DifferentialForm(self.grid, form_degree=1, field=grad)
-        else:
-            # Divergence of vector field (1-form → 0-form)
-            div = np.zeros(self.grid.res)
-            for i in range(3):
-                div += (np.roll(self.field[..., i], -1, axis=i) - 
-                       np.roll(self.field[..., i], 1, axis=i)) / (2 * self.h)
-            return DifferentialForm(self.grid, form_degree=0, field=div)
-
-    def divergence(self):
-        """Compute the divergence of a 1-form using central differences."""
-        if self.form_degree != 1:
-            raise ValueError("Divergence is only defined for 1-forms")
+            return DifferentialForm(self.grid, 0, self.field.copy()) # 0-form equal to 3-form
         
-        grad_phi = self.field
-        dx = dy = dz = self.h
-        div_x = (np.roll(grad_phi[..., 0], -1, axis=0) - np.roll(grad_phi[..., 0], 1, axis=0)) / (2 * dx)
-        div_y = (np.roll(grad_phi[..., 1], -1, axis=1) - np.roll(grad_phi[..., 1], 1, axis=1)) / (2 * dy)
-        div_z = (np.roll(grad_phi[..., 2], -1, axis=2) - np.roll(grad_phi[..., 2], 1, axis=2)) / (2 * dz)
-        return div_x + div_y + div_z
-
-    def codivergence(self):
-        """Compute the codivergence (δ) of a 1-form."""
-        if self.form_degree != 1:
-            raise ValueError("Codivergence is only defined for 1-forms")
-        
-        # Step 1: Compute Hodge star (convert to 2-form)
-        X_dual = np.zeros_like(self.field)
-        X_dual[..., 0] = self.field[..., 1]  # ⋆(dx) = dy∧dz
-        X_dual[..., 1] = -self.field[..., 0]  # ⋆(dy) = -dx∧dz
-        X_dual[..., 2] = self.field[..., 2]  # ⋆(dz) = dx∧dy
-
-        # Step 2: Compute exterior derivative d(⋆X)
-        dX_dual = np.zeros_like(X_dual)
-        for i in range(3):
-            dX_dual[..., i] = (np.roll(X_dual[..., i], -1, axis=i) - X_dual[..., i]) / self.h
-
-        # Step 3: Compute final Hodge star to obtain codivergence
-        codiv = dX_dual[..., 0] + dX_dual[..., 1] + dX_dual[..., 2]
-        return DifferentialForm(self.grid, form_degree=0, field=codiv)
-
-    def get_magnitude(self):
-        """Compute the magnitude of the form."""
-        if self.form_degree == 0:
-            return np.abs(self.field)
+        # For 1-forms and 2-forms, since the forms are stored as values on vertices, 
+        # we just return the same field with degree of dual form.
+        # This corresponds to the order of elements we defined, 
+        # the first component being associated with x-component for 1-forms
+        # and for 2-forms the first component being the flux through dy v dz area form.
+        elif self.form_degree == 1:
+            return DifferentialForm(self.grid, 2, self.field.copy())
         else:
-            return np.linalg.norm(self.field, axis=-1)
+            return DifferentialForm(self.grid, 1, self.field.copy())
 
-    def get_normalized(self):
-        """Return a normalized version of the form."""
-        if self.form_degree == 0:
-            raise ValueError("Normalization is only defined for 1-forms")
-        norms = self.get_magnitude()
-        norms[norms == 0] = 1  # Avoid division by zero
-        normalized_field = self.field / norms[..., None]
-        return DifferentialForm(self.grid, form_degree=1, field=normalized_field)
+    def codifferential(self):
+        return self.hodge_star().exterior_derivative().hodge_star()
 
-    def mass(self):
-        """Compute the mass norm of the form."""
+    def exterior_derivative_fourier(self, alpha=0.0):
+        kx, ky, kz = self.grid.k_space
+        k2 = kx**2 + ky**2 + kz**2
+        # Apply smoothing to get rid of Gibb's phenomena for rough impulses.
+        smoothing = np.exp(-alpha * k2)
         if self.form_degree == 0:
-            return np.sum(np.abs(self.field)) * (self.h ** 3)
+            F = np.fft.fftn(self.field[..., 0]) * smoothing
+            grad = np.stack([
+                np.fft.ifftn(1j * kx * F).real,
+                np.fft.ifftn(1j * ky * F).real,
+                np.fft.ifftn(1j * kz * F).real
+            ], axis=-1)
+            return DifferentialForm(self.grid, 1, grad)
+        elif self.form_degree == 1:
+            Fx = np.fft.fftn(self.field[..., 0]) * smoothing
+            Fy = np.fft.fftn(self.field[..., 1]) * smoothing
+            Fz = np.fft.fftn(self.field[..., 2]) * smoothing
+
+            curl = np.stack([
+                np.fft.ifftn(1j * (ky * Fz - kz * Fy)).real,
+                np.fft.ifftn(1j * (kz * Fx - kx * Fz)).real,
+                np.fft.ifftn(1j * (kx * Fy - ky * Fx)).real
+            ], axis=-1)
+            return DifferentialForm(self.grid, 2, curl)
         else:
-            return np.sum(np.linalg.norm(self.field, axis=-1)) * (self.h ** 3)
+            Fx = np.fft.fftn(self.field[..., 0]) * smoothing
+            Fy = np.fft.fftn(self.field[..., 1]) * smoothing
+            Fz = np.fft.fftn(self.field[..., 2]) * smoothing
+            div_hat = 1j * (kx * Fx + ky * Fy + kz * Fz)
+            div = np.fft.ifftn(div_hat).real
+            return DifferentialForm(self.grid, 0, div[..., np.newaxis]) # Note that 3-forms are equal to 0-forms since they are both scalar fields for manifold of dimension 3.
+
+    def codifferential_fourier(self, alpha=0.0):
+        if self.form_degree not in [1, 2]:
+            raise NotImplementedError("Fourier codifferential only implemented for 1- and 2-forms")
+
+        return self.hodge_star().exterior_derivative_fourier(alpha=alpha).hodge_star()
 
     def l2_norm(self):
-        """Compute the L2 norm of the form."""
-        if self.form_degree == 0:
-            return np.sqrt(np.sum(self.field ** 2) * (self.h ** 3))
-        else:
-            return np.sqrt(np.sum(self.field ** 2) * (self.h ** 3))
-
-    def __mul__(self, other):
-        """Compute the inner product of two forms."""
-        if self.form_degree != other.form_degree:
-            raise ValueError("Can only multiply forms of the same degree")
-        if self.grid != other.grid:
-            raise ValueError("Forms must be defined on the same grid")
-        
-        if self.form_degree == 0:
-            return np.sum(self.field * other.field) * (self.h ** 3)
-        else:
-            return np.sum(np.sum(self.field * other.field, axis=-1)) * (self.h ** 3)
-
-    def apply_mask(self, mask_func):
-        """Zero out the form outside a region defined by mask_func."""
-        positions = self.grid.get_flat_positions()
-        mask = np.array([mask_func(p) for p in positions])
-        mask = mask.reshape(self.grid.res)
-        
-        if self.form_degree == 0:
-            self.field[~mask] = 0
-        else:
-            self.field[~mask, :] = 0
+        assert self.form_degree == 1, 'L_2 norm being only defined for 1-forms.'
+        vol = self.h ** 3
+        return np.sqrt(np.sum(self.field ** 2) * vol)
 
     def __repr__(self):
-        return f"DifferentialForm(degree={self.form_degree}, grid={self.grid})" 
+        return f"DifferentialForm(degree={self.form_degree}, shape={self.field.shape})"
+    
+    def evaluate_at_point(self, point):
+        """
+        Evaluate the form by nearest grid point, no interpolation
+        """
+        idx = self.grid.position_to_index(point)
+        if np.any(idx < 0) or np.any(idx >= self.grid.res):
+            return np.zeros(3 if self.form_degree > 0 else 1)
+        return self.field[tuple(idx)]

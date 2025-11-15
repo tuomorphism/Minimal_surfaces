@@ -1,6 +1,7 @@
 import numpy as np
+from src.utils.levi_civita import generate_symbols
 
-def SignedIntersection(Γ, f):
+def SignedIntersection(Γ, f, return_crossings = False):
     """
     Compute the flux-weighted signed intersection of a discrete curve segment with a finite rectangular grid face,
     ensuring that the final sum is properly normalized.
@@ -23,11 +24,10 @@ def SignedIntersection(Γ, f):
     # Define the normal vector of the face
     face_normal = np.zeros(3)
     face_normal[normal_axis] = 1  # Example: If normal is in the Z direction, it's (0,0,1)
-    
-    # Get the two axes defining the plane of the face
-    other_axes = [0, 1, 2]
-    other_axes.remove(normal_axis)  # Get the two remaining coordinate axes
-    j, k = other_axes  # These define the face’s 2D plane
+
+    # Levi-Civita symbol should equal 1 for basis indices j, k for basis vector e_i.
+    total_permutations = generate_symbols()
+    _i, j, k = total_permutations[e_i][0]
     
     # Compute face boundaries based on size
     face_min = np.array([v[j], v[k]])  # Min corner in (j,k) plane
@@ -48,23 +48,22 @@ def SignedIntersection(Γ, f):
         if (coord1 < face_coord and coord2 > face_coord) or (coord1 > face_coord and coord2 < face_coord):
             
             # Compute intersection point
-            t = (face_coord - coord1) / (coord2 - coord1)  # Linear interpolation factor
-            intersection = p1 + t * (p2 - p1)  # Compute actual intersection point
-            
-            # Extract intersection in face's coordinate system
+            t = (face_coord - coord1) / (coord2 - coord1)  
+            intersection = p1 + t * (p2 - p1)  
             intersection_2d = np.array([intersection[j], intersection[k]])
 
             # Check if the intersection lies within the finite face
             if np.all(face_min <= intersection_2d) and np.all(intersection_2d <= face_max):
                 
                 # Compute curve tangent at intersection
-                curve_tangent = (p2 - p1) / np.linalg.norm(p2 - p1)  # Normalize segment vector
+                curve_tangent = (p2 - p1) / np.linalg.norm(p2 - p1) 
 
                 # Compute projection of tangent onto face normal
                 flux_contribution = np.dot(curve_tangent, face_normal)
                 
-                total_flux += flux_contribution  # Accumulate contribution
-                crossing_count += 1  # Count the number of crossings
+                total_flux += flux_contribution
+                crossing_count += 1
     
-    # Ensure final result is within [-1,1]
-    return (total_flux, crossing_count)
+    if return_crossings:
+        return (total_flux, crossing_count)
+    return total_flux

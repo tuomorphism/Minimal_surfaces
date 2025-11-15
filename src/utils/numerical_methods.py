@@ -15,7 +15,7 @@ def numerical_tangent_function(t, f, h = 0.001):
     """
     return (1 / (12 * h)) * (-f(t + 2 * h) + 8 * f(t + h) - 8 * f(t - h) + f(t - 2*h))
 
-def poisson_solve_v2(Phi_form: ZeroForm) -> np.array:
+def poisson_solve_v2(phi: np.array, h) -> np.array:
     """
     Solves Poisson's equation Δu = Phi using FFT in a periodic domain.
 
@@ -26,13 +26,11 @@ def poisson_solve_v2(Phi_form: ZeroForm) -> np.array:
     Returns:
         np.array: Solution to Poisson's equation.
     """
-    Phi = Phi_form.scalar_field
-    h = Phi_form.h
 
-    Nx, Ny, Nz = Phi.shape
+    Nx, Ny, Nz = phi.shape
 
     # Compute Fourier transform of Phi
-    Phi_fft = np.fft.fftn(Phi)
+    Phi_fft = np.fft.fftn(phi)
     
     # Compute Fourier-space frequencies
     kx = np.fft.fftfreq(Nx, d=h)
@@ -51,9 +49,6 @@ def poisson_solve_v2(Phi_form: ZeroForm) -> np.array:
 
     # Solve Poisson's equation in Fourier space
     result_fft = Phi_fft / (-laplacian_fourier + 1E-9)
-
-    # Enforce zero mean solution
-    # result_fft[0, 0, 0] = 0
 
     # Transform back into real space
     result = np.fft.ifftn(result_fft).real
