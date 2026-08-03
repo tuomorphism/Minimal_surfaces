@@ -4,3 +4,6 @@ __pycache__
 __MACOSX/
 data/*
 .venv/
+# Reference papers (kept locally, not tracked)
+*.pdf
+.pytest_cache/

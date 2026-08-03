@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minimal-surfaces"
+version = "0.2.0"
+description = "Computing minimal surfaces with differential forms (Wang & Chern 2021)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-image>=0.21",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+# Manim needs system libraries (cairo, pango, ffmpeg) and is only used by
+# src/animation and the visualization cells of the notebook.
+animation = ["manim>=0.18"]
+notebook = ["jupyter", "ipykernel"]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:skimage.*"]
