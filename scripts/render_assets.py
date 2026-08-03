@@ -245,8 +245,13 @@ def fig_operators():
     finish(fig, "operators")
 
 
-def fig_admm(make_gif=True):
-    """Convergence history, and the field collapsing onto the surface."""
+def fig_admm(make_gif=False):
+    """Convergence history, and the field collapsing onto the surface.
+
+    The 2D slice GIF is off by default: scripts/render_animations.py produces a
+    3D version of the same collapse that the notebook uses instead. Pass
+    make_gif=True if you want the lightweight slice animation as well.
+    """
     grid = Grid(48)
     exact = np.pi * RADIUS**2
     snapshots = {}

@@ -35,6 +35,7 @@ class PlateauSolution:
     level_set: np.ndarray = None
     vertices: np.ndarray = None
     faces: np.ndarray = None
+    level: float = None
 
     def __repr__(self):
         return (

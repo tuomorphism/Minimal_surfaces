@@ -281,3 +281,46 @@ def test_list_of_curves_matches_manual_concatenation():
     as_callables = dirac_delta_curve(grid, gammas)
     as_arrays = dirac_delta_curve(grid, [curves.discretize(g, 512) for g in gammas])
     assert np.allclose(as_callables, as_arrays)
+
+
+# -- extraction fidelity ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name,gamma,clip,lower",
+    [
+        ("circle", circle, 0.15, 0.95),
+        ("ellipse", lambda t: curves.ellipse(t, a=0.35, b=0.2), 0.15, 0.95),
+        ("trefoil", curves.trefoil, 0.15, 0.80),
+        ("borromean", curves.borromean_rings(), 0.22, 0.80),
+    ],
+)
+def test_extracted_area_tracks_the_mass_norm(name, gamma, clip, lower):
+    """The mesh area must match ||eta||_mass, which is what it represents.
+
+    A single isolevel cannot capture all of a topologically complex surface: u
+    drifts along Sigma by an amount comparable to its unit jump, so parts of the
+    surface sit at other levels. Choosing the level to match the mass norm took
+    Borromean recovery from 74% to 86%; the bound here is loose for the knotted
+    cases on purpose, and tight for the planar ones where the level is unambiguous.
+    """
+    sol = solve_plateau(gamma, resolution=40, rtol=1e-3, max_iter=400)
+    verts, faces = extract.extract_surface(sol, clip_fraction=clip)
+    ratio = extract.surface_area(verts, faces) / sol.mass
+    assert lower <= ratio <= 1.15, f"{name}: recovered {ratio:.2f} of the mass norm"
+
+
+def test_level_is_chosen_not_guessed():
+    """The selected level should beat the weighted-median seed on a hard case."""
+    from src.extract import _jump_level, _mesh_at_level, level_set
+
+    sol = solve_plateau(curves.borromean_rings(), resolution=40, rtol=1e-3, max_iter=400)
+    magnitude = spectral.pointwise_norm(sol.eta)
+    u = level_set(sol.grid, sol.eta)
+
+    extract.extract_surface(sol, clip_fraction=0.22)
+    chosen = extract.surface_area(sol.vertices, sol.faces)
+
+    seed = _jump_level(u, magnitude)
+    v, f = _mesh_at_level(u, magnitude, sol.grid, seed, 0.22)
+    assert chosen >= extract.surface_area(v, f)

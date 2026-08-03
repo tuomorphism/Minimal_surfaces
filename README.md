@@ -63,6 +63,26 @@ python scripts/render_assets.py            # everything, a few minutes
 python scripts/render_assets.py gallery    # one figure by name
 ```
 
+The 3D animations are rendered separately, because manim is an optional
+dependency with system-library requirements (cairo, pango, ffmpeg):
+
+```bash
+pip install -e ".[animation]"
+python scripts/render_animations.py               # all three
+python scripts/render_animations.py optimization  # one by name
+```
+
+| Animation | Shows |
+| --- | --- |
+| `anim_initial_guess.mp4` | η₀ as flowing field lines — literally the magnetic field of a current loop |
+| `anim_optimization.mp4` | an isosurface of \|η\| collapsing from a diffuse lens onto the disc |
+| `anim_gallery.mp4` | turntable of the trefoil and Borromean surfaces |
+
+They are embedded in the notebook with `<video>` tags, which render in Jupyter
+and VS Code but not on GitHub; the static figures alongside them cover that case.
+`render_animations.mp4_to_gif` will produce a GIF from any of them if you want
+one.
+
 ## Layout
 
 | Module | Role |
@@ -73,7 +93,9 @@ python scripts/render_assets.py gallery    # one figure by name
 | `src/initial_guess.py` | δ_Γ rasterization, Biot–Savart, cohomology correction (their Algorithm 5) |
 | `src/plateau.py` | ADMM solver (their Algorithm 1) |
 | `src/extract.py` | Level set + marching cubes → triangle mesh (their §4.1) |
-| `scripts/render_assets.py` | Regenerates every figure in `assets/` |
+| `src/animation/` | Manim scene building blocks (optional extra) |
+| `scripts/render_assets.py` | Regenerates every static figure in `assets/` |
+| `scripts/render_animations.py` | Regenerates the manim animations in `assets/` |
 
 ## Validation
 

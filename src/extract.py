@@ -27,12 +27,12 @@ def level_set(grid, eta) -> np.ndarray:
 
 
 def _jump_level(u, weights) -> float:
-    """The isovalue sitting inside the jump.
+    """The |eta|-weighted median of u over the surface -- a starting estimate.
 
-    u is only defined up to a constant, so the level must be chosen from the
-    data. On the surface u sweeps across the jump interval, so the |eta|-weighted
-    median of u lands inside it -- and unlike the midpoint of the global range it
-    is not thrown off by the smooth far-field variation of u.
+    u is only defined up to a constant, so the level has to come from the data.
+    Unlike the midpoint of the global range this is not thrown off by the smooth
+    far-field variation of u. It is only a seed for `_select_level`; see there
+    for why the median alone is not good enough.
     """
     order = np.argsort(u.ravel())
     vals, w = u.ravel()[order], weights.ravel()[order]
@@ -57,13 +57,16 @@ def _trilinear_sample(field, points):
     return out
 
 
-def extract_surface(solution, level: float = None, clip_fraction: float = 0.15):
+def extract_surface(solution, level: float = None, clip_fraction: float = 0.15,
+                    level_search: int = 13):
     """Extract the minimal surface as a triangle mesh.
 
     Parameters
     ----------
     solution : PlateauSolution from `plateau.solve_plateau`.
-    level : isovalue; chosen from the jump interval when None.
+    level : isovalue; when None it is chosen by `_select_level` to recover the
+        most surface area.
+    level_search : how many candidate isovalues to try when `level` is None.
     clip_fraction : drop triangles where |eta| falls below this fraction of its
         maximum. This is what turns the closed isosurface into a surface with
         boundary Gamma. Raise it if stray sheets survive, lower it if the surface
@@ -74,6 +77,26 @@ def extract_surface(solution, level: float = None, clip_fraction: float = 0.15):
     (vertices, faces) in world coordinates, and populates `solution.level_set`,
     `.vertices`, `.faces` in place.
     """
+    grid = solution.grid
+    eta = solution.eta
+    magnitude = spectral.pointwise_norm(eta)
+
+    u = level_set(grid, eta)
+    if level is None:
+        level = _select_level(u, magnitude, grid, clip_fraction, level_search,
+                              target_area=solution.mass)
+
+    verts, faces = _mesh_at_level(u, magnitude, grid, level, clip_fraction)
+
+    solution.level_set = u
+    solution.vertices = verts
+    solution.faces = faces
+    solution.level = level
+    return verts, faces
+
+
+def _mesh_at_level(u, magnitude, grid, level, clip_fraction):
+    """Marching cubes at one isovalue, clipped to the support of eta."""
     try:
         from skimage import measure
     except ImportError as exc:  # pragma: no cover
@@ -81,35 +104,61 @@ def extract_surface(solution, level: float = None, clip_fraction: float = 0.15):
             "Surface extraction needs scikit-image: pip install scikit-image"
         ) from exc
 
-    grid = solution.grid
-    eta = solution.eta
-    magnitude = spectral.pointwise_norm(eta)
-
-    u = level_set(grid, eta)
-    if level is None:
-        level = _jump_level(u, magnitude)
-
     # Pad by one cell so marching cubes closes correctly across the periodic seam.
     padded = np.pad(u, 1, mode="wrap")
-    verts, faces, _, _ = measure.marching_cubes(padded, level=level)
+    try:
+        verts, faces, _, _ = measure.marching_cubes(padded, level=level)
+    except (ValueError, RuntimeError):
+        return np.zeros((0, 3)), np.zeros((0, 3), dtype=int)
     verts -= 1.0  # undo the pad offset, back to index coordinates
 
     strength = _trilinear_sample(magnitude, verts)
     keep = strength >= clip_fraction * magnitude.max()
 
     # Keep only triangles whose three vertices all survive, then reindex.
-    face_mask = keep[faces].all(axis=1)
-    faces = faces[face_mask]
+    faces = faces[keep[faces].all(axis=1)]
     used = np.unique(faces)
     remap = np.full(len(verts), -1, dtype=int)
     remap[used] = np.arange(len(used))
-    faces = remap[faces]
-    verts = verts[used] * grid.h
+    return verts[used] * grid.h, remap[faces]
 
-    solution.level_set = u
-    solution.vertices = verts
-    solution.faces = faces
-    return verts, faces
+
+def _select_level(u, magnitude, grid, clip_fraction, n_candidates=13,
+                  target_area=None) -> float:
+    """Pick the isovalue whose recovered area best matches the mass norm.
+
+    For a disc, u jumps sharply across Sigma and barely varies along it, so any
+    level inside the jump works and the weighted median is fine. For a
+    topologically interesting surface that stops being true: u also drifts
+    smoothly *along* the surface by an amount comparable to the unit jump, so a
+    single isosurface only catches the part of Sigma where u happens to sit near
+    that level. Measured against the mass norm, the weighted median recovers 102%
+    of the area for a circle but only 74% for Borromean rings.
+
+    The objective is |area - ||eta||_mass|, not "largest area". Those differ:
+    maximizing area alone overshoots on a disc (109%), because there is always
+    some level that sweeps up extra geometry. The mass norm is exactly what the
+    surface area should equal, so it is the right target to aim at rather than a
+    quantity to maximize. Clipping keeps the search honest -- sheets away from
+    Sigma are removed before the area is measured.
+
+    A single level remains a genuine limitation for complex topologies; the
+    recovery ratio is asserted in `tests/test_plateau.py` so regressions show up.
+    """
+    support = magnitude > 0.2 * magnitude.max()
+    if not support.any():
+        return _jump_level(u, magnitude)
+
+    candidates = np.quantile(u[support], np.linspace(0.15, 0.85, n_candidates))
+
+    best_level, best_score = float(candidates[0]), np.inf
+    for candidate in candidates:
+        verts, faces = _mesh_at_level(u, magnitude, grid, float(candidate), clip_fraction)
+        area = surface_area(verts, faces)
+        score = -area if target_area is None else abs(area - target_area)
+        if score < best_score:
+            best_level, best_score = float(candidate), score
+    return best_level
 
 
 def surface_area(vertices, faces) -> float:
