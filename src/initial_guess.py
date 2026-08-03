@@ -32,8 +32,8 @@ class InitialGuess:
     residual: float  # relative ||curl(eta_0) - delta_Gamma||, a feasibility check
 
 
-def dirac_delta_curve(grid, points, sigma_cells: float = 1.0) -> np.ndarray:
-    """Discretize the Dirac-delta 2-form delta_Gamma of a closed polyline.
+def dirac_delta_curve(grid, polylines, sigma_cells: float = 1.0) -> np.ndarray:
+    """Discretize the Dirac-delta 2-form delta_Gamma of one or more closed loops.
 
     Deposits each segment's tangent vector onto the eight surrounding vertices
     with trilinear weights, giving the current density
@@ -49,19 +49,22 @@ def dirac_delta_curve(grid, points, sigma_cells: float = 1.0) -> np.ndarray:
     weights into a pointwise density, which is the convention used everywhere
     else in this codebase.
     """
-    mid, delta = curves.segments(np.asarray(points, dtype=float))
-
     field = np.zeros((*grid.res, 3))
-    coords = mid / grid.h
-    base = np.floor(coords).astype(int)
-    frac = coords - base
 
-    for corner in np.ndindex(2, 2, 2):
-        weight = np.ones(len(mid))
-        for axis, c in enumerate(corner):
-            weight *= frac[:, axis] if c else (1.0 - frac[:, axis])
-        idx = tuple(np.mod(base[:, a] + corner[a], grid.resolution) for a in range(3))
-        np.add.at(field, idx, weight[:, None] * delta / grid.cell_volume)
+    # Each component is closed on its own; depositing them as one polyline would
+    # add spurious current along the jumps between them.
+    for points in curves.as_polylines(polylines):
+        mid, delta = curves.segments(np.asarray(points, dtype=float))
+        coords = mid / grid.h
+        base = np.floor(coords).astype(int)
+        frac = coords - base
+
+        for corner in np.ndindex(2, 2, 2):
+            weight = np.ones(len(mid))
+            for axis, c in enumerate(corner):
+                weight *= frac[:, axis] if c else (1.0 - frac[:, axis])
+            idx = tuple(np.mod(base[:, a] + corner[a], grid.resolution) for a in range(3))
+            np.add.at(field, idx, weight[:, None] * delta / grid.cell_volume)
 
     # delta_Gamma of a closed curve satisfies d(delta_Gamma) = 0 exactly;
     # enforcing it discretely makes the Biot-Savart identity below exact.
@@ -97,26 +100,27 @@ def compute_initial_guess(
 
     Parameters
     ----------
-    gamma : callable(t) -> (3,), or an (M, 3) array of polyline points.
+    gamma : callable(t) -> (3,), an (M, 3) array of polyline points, or a list of
+        either for a multi-component boundary (e.g. `curves.borromean_rings`).
     num_points : curve samples; defaults to 8 per grid cell along the diagonal.
     sigma_cells : Gaussian mollification width for delta_Gamma, in grid cells.
     area : override the cohomology class. Required for curves that close only up
         to a lattice translation (e.g. `curves.helicoid`), where the projected
         area integral is not meaningful.
     """
-    points = (
-        np.asarray(gamma, dtype=float)
-        if not callable(gamma)
-        else curves.discretize(gamma, num_points or 8 * grid.resolution)
-    )
+    polylines = curves.as_polylines(gamma, num_points or 8 * grid.resolution)
 
-    delta_gamma = dirac_delta_curve(grid, points, sigma_cells=sigma_cells)
+    delta_gamma = dirac_delta_curve(grid, polylines, sigma_cells=sigma_cells)
     eta_tilde, psi = biot_savart(grid, delta_gamma)
 
     # Cohomology constraint (their eq. 37): integral of eta_0 ^ *dx_i = A_i.
     # In density units on the unit cube that is exactly mean(eta_0[..., i]) = A_i.
     # curl has zero mean by construction, so the harmonic part is just A itself.
-    A = np.asarray(area, dtype=float) if area is not None else curves.area_vector(points)
+    A = (
+        np.asarray(area, dtype=float)
+        if area is not None
+        else curves.total_area_vector(polylines)
+    )
     eta_0 = eta_tilde + A / grid.volume
 
     reconstructed = spectral.d1(grid, eta_0)

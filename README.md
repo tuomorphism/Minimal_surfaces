@@ -37,13 +37,31 @@ vertices, faces = extract_surface(solution)
 print(solution.mass, surface_area(vertices, faces))
 ```
 
-`gamma` is any `callable(t) -> (3,)` on `[0, 1)`, or an `(M, 3)` array of
-polyline points. `src/curves.py` ships circle, ellipse, polygon, triangle,
-trefoil, helicoid and Borromean rings.
+`gamma` is any `callable(t) -> (3,)` on `[0, 1)`, an `(M, 3)` array of polyline
+points, or a **list of either** for a multi-component boundary:
+
+```python
+solution = solve_plateau(curves.borromean_rings(), resolution=64)
+```
+
+`src/curves.py` ships circle, ellipse, polygon, triangle, trefoil, helicoid and
+Borromean rings.
 
 For curves that close only up to a lattice translation (`curves.helicoid`), the
 projected-area integral is not meaningful — pass the cohomology class explicitly
 via `area=`.
+
+## The notebook
+
+`minimal_surfaces.ipynb` is the whole project as one document: the mathematics,
+the discretization, the solver, the validation, and the errata. It runs in about
+20 seconds because the figures are pre-rendered into `assets/`. Regenerate them
+after changing anything that affects results:
+
+```bash
+python scripts/render_assets.py            # everything, a few minutes
+python scripts/render_assets.py gallery    # one figure by name
+```
 
 ## Layout
 
@@ -55,6 +73,7 @@ via `area=`.
 | `src/initial_guess.py` | δ_Γ rasterization, Biot–Savart, cohomology correction (their Algorithm 5) |
 | `src/plateau.py` | ADMM solver (their Algorithm 1) |
 | `src/extract.py` | Level set + marching cubes → triangle mesh (their §4.1) |
+| `scripts/render_assets.py` | Regenerates every figure in `assets/` |
 
 ## Validation
 

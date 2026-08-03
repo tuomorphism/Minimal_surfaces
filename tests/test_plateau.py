@@ -229,3 +229,55 @@ def test_convergence_flag_is_reachable():
     assert sol.iterations < 2000
     assert sol.history["primal_relative"][-1] < 3e-3
     assert sol.history["dual_relative"][-1] < 3e-3
+
+
+# -- multi-component boundaries --------------------------------------------
+
+
+def test_borromean_rings_are_three_separate_loops():
+    """Each ring must be deposited as its own closed loop.
+
+    Parameterizing all three as a single curve would lay down spurious current
+    along the jumps between them, so `as_polylines` keeps them separate.
+    """
+    rings = curves.borromean_rings()
+    assert len(rings) == 3
+    normalized = curves.as_polylines(rings)
+    assert len(normalized) == 3
+    assert all(np.allclose(a, b) for a, b in zip(normalized, rings))
+
+    # Each ring is an ellipse of area pi*a*b normal to its own axis.
+    exact = np.pi * 0.28 * (0.28 / 1.6180339887)
+    for axis, ring in enumerate(rings):
+        A = curves.area_vector(ring)
+        assert A[(axis + 2) % 3] == pytest.approx(exact, rel=1e-3)
+    assert curves.total_area_vector(rings) == pytest.approx(np.full(3, exact), rel=1e-3)
+
+
+def test_multi_component_boundary_stays_feasible():
+    """d(eta_0) = delta_Gamma must hold for a three-loop boundary too."""
+    rings = curves.borromean_rings()
+    guess = compute_initial_guess(Grid(32), rings)
+    assert guess.residual < 1e-10
+
+
+def test_borromean_rings_solve():
+    rings = curves.borromean_rings()
+    sol = solve_plateau(rings, resolution=32, max_iter=200)
+    assert np.isfinite(sol.mass) and sol.mass > 0
+    assert sol.mass < spectral.mass_norm(sol.grid, sol.eta_0)
+    # The spanning surface is genuinely 3D, not three disjoint discs: each of
+    # those would have area pi*a*b, so three of them would total ~0.46.
+    assert sol.mass < 0.9 * 3 * np.pi * 0.28 * (0.28 / 1.6180339887)
+
+
+def test_list_of_curves_matches_manual_concatenation():
+    """A list of callables and a list of arrays must give the same delta_Gamma."""
+    from src.initial_guess import dirac_delta_curve
+
+    grid = Grid(24)
+    gammas = [lambda t: curves.circle(t, radius=0.2, center=(0.5, 0.5, 0.35)),
+              lambda t: curves.circle(t, radius=0.2, center=(0.5, 0.5, 0.65))]
+    as_callables = dirac_delta_curve(grid, gammas)
+    as_arrays = dirac_delta_curve(grid, [curves.discretize(g, 512) for g in gammas])
+    assert np.allclose(as_callables, as_arrays)

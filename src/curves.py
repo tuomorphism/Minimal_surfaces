@@ -15,6 +15,32 @@ def discretize(gamma, num_points: int = 512) -> np.ndarray:
     return np.asarray([np.asarray(gamma(ti), dtype=float) for ti in t])
 
 
+def as_polylines(gamma, num_points: int = 512) -> list:
+    """Normalize any boundary specification into a list of closed polylines.
+
+    Accepts a callable, an (M, 3) array, or a sequence of either. The list form
+    is what makes multi-component boundaries work: three separate rings must be
+    deposited as three closed loops, not as one curve that teleports between
+    them, which would lay down spurious current along the connecting jumps.
+    """
+    if callable(gamma):
+        return [discretize(gamma, num_points)]
+    if isinstance(gamma, (list, tuple)):
+        out = []
+        for component in gamma:
+            out.extend(as_polylines(component, num_points))
+        return out
+    arr = np.asarray(gamma, dtype=float)
+    if arr.ndim == 3:
+        return [np.asarray(component, dtype=float) for component in arr]
+    return [arr]
+
+
+def total_area_vector(polylines) -> np.ndarray:
+    """Projected area vector of a whole multi-component boundary."""
+    return sum(area_vector(p) for p in polylines)
+
+
 def segments(points: np.ndarray):
     """Midpoints and edge vectors of a closed polyline.
 
@@ -100,18 +126,26 @@ def triangle(t, vertices=((0.3, 0.3, 0.5), (0.7, 0.35, 0.5), (0.5, 0.7, 0.5))):
     return polygon(t, vertices)
 
 
-def borromean_rings(t, radius=0.22, offset=0.09, center=(0.5, 0.5, 0.5)):
-    """Three linked ellipses in mutually orthogonal planes, traversed in sequence.
+def borromean_rings(radius=0.28, center=(0.5, 0.5, 0.5), num_points=512) -> list:
+    """Three ellipses inscribed in mutually orthogonal golden rectangles.
 
-    The paper's cover figure. Returned as a single parameterized curve with three
-    components; the connecting jumps are degenerate and contribute no area.
+    The classic Borromean configuration and the paper's cover figure: the rings
+    are pairwise *unlinked* (each pair has linking number zero) yet the triple
+    cannot be separated, so the minimal surface spanning them is genuinely
+    three-dimensional rather than three separate discs.
+
+    Unlike the other entries here this returns a **list of three polylines**, not
+    a callable -- see `as_polylines`. Passing it to `solve_plateau` works
+    directly.
     """
     center = np.asarray(center, dtype=float)
-    branch = int(np.mod(t, 1.0) * 3) % 3
-    local = np.mod(t * 3, 1.0)
-    u, v = radius * np.cos(2 * np.pi * local), radius * np.sin(2 * np.pi * local)
-    if branch == 0:
-        return center + np.asarray([u, v, offset])
-    if branch == 1:
-        return center + np.asarray([offset, u, v])
-    return center + np.asarray([v, offset, u])
+    a = radius
+    b = radius / 1.6180339887  # golden ratio
+    t = np.linspace(0.0, 1.0, num_points, endpoint=False)
+    u, v = a * np.cos(2 * np.pi * t), b * np.sin(2 * np.pi * t)
+    zero = np.zeros_like(u)
+    return [
+        center + np.stack([u, v, zero], axis=-1),
+        center + np.stack([zero, u, v], axis=-1),
+        center + np.stack([v, zero, u], axis=-1),
+    ]
